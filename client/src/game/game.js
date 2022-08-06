@@ -11,21 +11,17 @@ import backgroundMusic1 from "./../assets/sound/backgroundMusic1.mp3";
 import backgroundMusic2 from "./../assets/sound/backgroundMusic2.mp3";
 import * as Colyseus from "colyseus.js";
 
-var gameConfig = require('./../../config.json');
+import gameConfig from "./../../config.json";
 
 const endpoint = (window.location.hostname === "localhost") ? `ws://localhost:${gameConfig.serverDevPort}` : `${window.location.protocol.replace("http", "ws")}//${window.location.hostname}:${gameConfig.serverDevPort}`
 
-
-/*for heroku remote deployment...to run it locally comment the code below and uncomment the code at the top
-const endpoint = (window.location.protocol === "http:") ? `ws://${gameConfig.herokuRemoteUrl}` : `wss://${gameConfig.herokuRemoteUrl}`*/
-
 var client = new Colyseus.Client(endpoint);
 
+console.log('client => ', client)
 
 export default class Game extends Phaser.Scene {
     constructor() {
         super("Game");
-
     }
 
     init() {
@@ -41,7 +37,6 @@ export default class Game extends Phaser.Scene {
         this.backgroundMusic = null;
 
         this.closingMessage = "You have been disconnected from the server";
-
     }
 
     preload() {
@@ -54,7 +49,6 @@ export default class Game extends Phaser.Scene {
     }
 
     create() {
-
         this.backgroundMusic = this.sound.add('backgroundMusic');
         this.backgroundMusic.setLoop(true).play();
 
@@ -65,11 +59,10 @@ export default class Game extends Phaser.Scene {
             key: "map"
         });
 
-
         const tileset = this.map.addTilesetImage("battle-royale", "tiles");
-        const floorLayer = this.map.createStaticLayer("floor", tileset, 0, 0);
+        const floorLayer = this.map.createLayer("floor", tileset, 0, 0);
         //const herbeLayer = this.map.createStaticLayer("herbe", tileset, 0, 0);
-        this.map["blockLayer"] = this.map.createStaticLayer("block", tileset, 0, 0);
+        this.map["blockLayer"] = this.map.createLayer("block", tileset, 0, 0);
         //this.map["wallLayer"] = this.map.createStaticLayer("wall", tileset, 0, 0);
         this.map["blockLayer"].setCollisionByProperty({
             collide: true
@@ -84,10 +77,7 @@ export default class Game extends Phaser.Scene {
         this.scoreText = this.add.text(16, 16, "numbers of kills : " + this.score, {
             font: "18px monospace",
             fill: "#FFFFFF",
-            padding: {
-                x: 20,
-                y: 10
-            },
+            padding: { x: 20, y: 10 },
         }).setScrollFactor(0).setDepth(10);
 
         this.cursors = this.input.keyboard.createCursorKeys();
@@ -95,85 +85,82 @@ export default class Game extends Phaser.Scene {
 
     connect() {
         var self = this;
-        this.room = client.join("outdoor", {});
+        client.joinOrCreate("outdoor", {}).then((room) => {
+          // success
 
+            this.room = room
+            console.log('room => ', this.room)
 
-        this.room.onJoin.add(() => {
+            this.room.onJoin(() => {
+                self.roomJoined = true;
+                this.room.onStateChange.once((state) => {
+                    // Loop over all the player data received
+                    for (let id in state.players) {
+                        // If the player hasn't been created yet
+                        if (self.players[id] == undefined && id != this.room.sessionId) { // Make sure you don't create yourself
+                            let data = state.players[id];
+                            self.addPlayer({
+                                id: id,
+                                x: data.x,
+                                y: data.y,
+                                rotation: data.rotation || 0
+                            });
+                            let player_sprite = self.players[id].sprite;
+                            player_sprite.target_x = state.players[id].x; // Update target, not actual position, so we can interpolate
+                            player_sprite.target_y = state.players[id].y;
+                            player_sprite.target_rotation = (state.players[id].rotation || 0);
+                        }
 
-            self.roomJoined = true;
-
-            this.room.onStateChange.addOnce((state) => {
-                // Loop over all the player data received
-                for (let id in state.players) {
-                    // If the player hasn't been created yet
-                    if (self.players[id] == undefined && id != this.room.sessionId) { // Make sure you don't create yourself
-                        let data = state.players[id];
-                        self.addPlayer({
-                            id: id,
-                            x: data.x,
-                            y: data.y,
-                            rotation: data.rotation || 0
-                        });
-                        let player_sprite = self.players[id].sprite;
-                        player_sprite.target_x = state.players[id].x; // Update target, not actual position, so we can interpolate
-                        player_sprite.target_y = state.players[id].y;
-                        player_sprite.target_rotation = (state.players[id].rotation || 0);
                     }
+                });
 
+                this.room.state.players.onAdd = (player, sessionId) => {
+                    //to prevent the player from recieving a message when he is the new player added
+                    if (sessionId != this.room.sessionId) {
+                        // If you want to track changes on a child object inside a map, this is a common pattern:
+                        player.onChange = function (changes) {
+                            changes.forEach(change => {
+                                if (change.field == "rotation") {
+                                    self.players[sessionId].sprite.target_rotation = change.value;
+                                } else if (change.field == "x") {
+                                    self.players[sessionId].sprite.target_x = change.value;
+                                } else if (change.field == "y") {
+                                    self.players[sessionId].sprite.target_y = change.value;
+                                }
+                            });
+                        };
+                    }
                 }
-            });
 
-            this.room.state.players.onAdd = (player, sessionId) => {
-                //to prevent the player from recieving a message when he is the new player added
-                if (sessionId != this.room.sessionId) {
+                this.room.state.bullets.onAdd = (bullet, sessionId) => {
+                    self.bullets[bullet.index] = self.physics.add.sprite(bullet.x, bullet.y, 'bullet').setRotation(bullet.angle);
+
                     // If you want to track changes on a child object inside a map, this is a common pattern:
-                    player.onChange = function (changes) {
+                    bullet.onChange = function (changes) {
                         changes.forEach(change => {
-                            if (change.field == "rotation") {
-                                self.players[sessionId].sprite.target_rotation = change.value;
-                            } else if (change.field == "x") {
-                                self.players[sessionId].sprite.target_x = change.value;
+                            if (change.field == "x") {
+                                self.bullets[bullet.index].x = change.value;
                             } else if (change.field == "y") {
-                                self.players[sessionId].sprite.target_y = change.value;
+                                self.bullets[bullet.index].y = change.value;
                             }
                         });
                     };
 
                 }
-            }
 
-            this.room.state.bullets.onAdd = (bullet, sessionId) => {
-                self.bullets[bullet.index] = self.physics.add.sprite(bullet.x, bullet.y, 'bullet').setRotation(bullet.angle);
-
-                // If you want to track changes on a child object inside a map, this is a common pattern:
-                bullet.onChange = function (changes) {
-                    changes.forEach(change => {
-                        if (change.field == "x") {
-                            self.bullets[bullet.index].x = change.value;
-                        } else if (change.field == "y") {
-                            self.bullets[bullet.index].y = change.value;
-                        }
-                    });
-                };
-
-            }
-
-            this.room.state.bullets.onRemove = function (bullet, sessionId) {
-                self.removeBullet(bullet.index);
-            }
-
-
-
-            this.room.state.players.onRemove = function (player, sessionId) {
-                //if the player removed (maybe killed) is not this player
-                if (sessionId !== self.room.sessionId) {
-                    self.removePlayer(sessionId);
+                this.room.state.bullets.onRemove = function (bullet, sessionId) {
+                    self.removeBullet(bullet.index);
                 }
-            }
-        });
 
-        this.room.onMessage.add((message) => {
-            if (message.event == "start_position") {
+                this.room.state.players.onRemove = function (player, sessionId) {
+                    //if the player removed (maybe killed) is not this player
+                    if (sessionId !== self.room.sessionId) {
+                        self.removePlayer(sessionId);
+                    }
+                }
+            });
+
+            this.room.onMessage("start_position", (message) => {
                 let spawnPoint = this.map.findObject("player", obj => obj.name === `player${message.position}`);
                 let position = {
                     x: spawnPoint.x,
@@ -188,7 +175,9 @@ export default class Game extends Phaser.Scene {
                     x: spawnPoint.x,
                     y: spawnPoint.y
                 });
-            } else if (message.event == "new_player") {
+            });
+
+            this.room.onMessage("new_player", (message) => {
                 let spawnPoint = this.map.findObject("player", obj => obj.name === `player${message.position}`);
                 let p = self.addPlayer({
                     x: spawnPoint.x,
@@ -196,7 +185,10 @@ export default class Game extends Phaser.Scene {
                     id: message.id,
                     rotation: message.rotation || 0
                 });
-            } else if (message.event == "hit") {
+            });
+
+            this.room.onMessage("hit", (message) => {
+                console.log('message => ', message)
                 if (message.punisher_id == self.room.sessionId) {
                     self.score += 1;
                     self.scoreText.setText("numbers of kills : " + self.score);
@@ -208,13 +200,18 @@ export default class Game extends Phaser.Scene {
                     client.close();
                     //maybe implement the possibility to the see the game after being killed
                 }
-            } else {
-                console.log(`${message.event} is an unkown event`);
-            }
-        });
+            });
+            this.room.onMessage("0", (message) => {
+                console.log(message)
+            });
 
-        this.room.onError.add(() => {
-            alert(room.sessionId + " couldn't join " + room.name);
+            this.room.onError(() => {
+                alert(room.sessionId + " couldn't join " + room.name);
+            });
+        }).catch((err) => {
+          console.log('ERROR---')
+          console.log('code: ', err.code)
+          console.log('message: ', err.message)
         });
 
     }
@@ -225,7 +222,7 @@ export default class Game extends Phaser.Scene {
             let p = this.players[id].sprite;
             p.x += ((p.target_x || p.x) - p.x) * 0.5;
             p.y += ((p.target_y || p.x) - p.y) * 0.5;
-            // Intepolate angle while avoiding the positive/negative issue 
+            // Intepolate angle while avoiding the positive/negative issue
             let angle = p.target_rotation || p.rotation;
             let dir = (angle - p.rotation) / (Math.PI * 2);
             dir -= Math.round(dir);
@@ -263,7 +260,7 @@ export default class Game extends Phaser.Scene {
                     let speed_x = Math.cos(this.player.sprite.rotation + Math.PI / 2) * 50;
                     let speed_y = Math.sin(this.player.sprite.rotation + Math.PI / 2) * 50;
 
-                    // Tell the server we shot a bullet 
+                    // Tell the server we shot a bullet
                     this.room.send({
                         action: "shoot_bullet",
                         data: {
@@ -330,5 +327,4 @@ export default class Game extends Phaser.Scene {
         this.bullets[index].destroy();
         delete this.bullets[index];
     }
-
 }

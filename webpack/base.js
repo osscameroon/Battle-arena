@@ -1,9 +1,8 @@
-const webpack = require("webpack");
-const path = require("path");
-const HtmlWebpackPlugin = require("html-webpack-plugin");
-const CleanWebpackPlugin = require("clean-webpack-plugin");
+import webpack from "webpack";
+import HtmlWebpackPlugin from "html-webpack-plugin";
+import { CleanWebpackPlugin } from "clean-webpack-plugin";
 
-module.exports = {
+export default {
   mode: "development",
   devtool: "eval-source-map",
   module: {
@@ -26,18 +25,18 @@ module.exports = {
     ]
   },
   entry: {
-    app: ["./client/src/index.js"]
+    app: ["./src/index.js"]
   },
   plugins: [
-    new CleanWebpackPlugin(["public"], {
-      root: path.resolve(__dirname, "client/public")
+    new CleanWebpackPlugin({
+      root: "./client/public"
     }),
     new webpack.DefinePlugin({
       CANVAS_RENDERER: JSON.stringify(true),
       WEBGL_RENDERER: JSON.stringify(true)
     }),
     new HtmlWebpackPlugin({
-      template: "./client/src/index.html"
+      template: "./src/index.html"
     })
   ]
 };

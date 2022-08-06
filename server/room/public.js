@@ -1,9 +1,5 @@
-const colyseus = require('colyseus')
-const schema = require('@colyseus/schema');
-const Schema = schema.Schema;
-const MapSchema = schema.MapSchema;
-//const ArraySchema = schema.ArraySchema;
-const type = schema.type;
+import { Room } from "@colyseus/core";
+import { MapSchema, Schema, type} from '@colyseus/schema'
 
 class Player extends Schema {}
 type("number")(Player.prototype, "x");
@@ -19,7 +15,6 @@ type("number")(Bullet.prototype, "speed_y");
 type("number")(Bullet.prototype, "index");
 
 
-
 class State extends Schema {
     constructor() {
         super();
@@ -29,13 +24,11 @@ class State extends Schema {
         this.nextPosition = 0;
         this.bullet_index = 0;
     }
-
     getNextPosition() {
-        let position = (this.nextPosition % 4) + 1;
+        const position = (this.nextPosition % 4) + 1;
         ++this.nextPosition;
         return position;
     }
-
     createBullet(id, data) {
         let bullet = new Bullet();
         bullet.index = this.bullet_index;
@@ -48,107 +41,99 @@ class State extends Schema {
         bullet.owner_id = id;
         this.bullets[this.bullet_index++] = bullet;
     }
-
     moveBullet(index) {
-        let old_x = this.bullets[index].x;
-        let old_y = this.bullets[index].y;
+        const old_x = this.bullets[index].x;
+        const old_y = this.bullets[index].y;
 
         this.bullets[index].x -= this.bullets[index].speed_x;
         this.bullets[index].y -= this.bullets[index].speed_y;
 
-        let dx = this.bullets[index].x - old_x;
-        let dy = this.bullets[index].y - old_y;
+        const dx = this.bullets[index].x - old_x;
+        const dy = this.bullets[index].y - old_y;
 
         this.bullets[index].distanceTravelled += Math.sqrt(dx * dx + dy * dy);
     }
-
     removeBullet(index) {
         delete this.bullets[index];
     }
-
-
-
     createPlayer(id) {
         this.players[id] = new Player();
     }
-
     getPlayer(id) {
         return this.players[id];
     }
-
     newPlayer(id) {
         return this.players[id];
     }
-
     removePlayer(id) {
         delete this.players[id];
     }
-
     setPlayerPosition(id, position) {
         this.players[id].x = position.x;
         this.players[id].y = position.y;
     }
-
     movePlayer(id, movement) {
         let player = this.players[id];
         player.x = movement.x;
         player.y = movement.y;
         player.rotation = movement.rotation
     }
-
 }
-type({
-    map: Player
-})(State.prototype, "players");
-type({
-    map: Bullet
-})(State.prototype, "bullets");
 
-exports.outdoor = class extends colyseus.Room {
+type({ map: Player })(State.prototype, "players");
+type({ map: Bullet })(State.prototype, "bullets");
 
+export class Outdoor extends Room {
     onInit() {
         this.setState(new State());
         this.clock.setInterval(this.ServerGameLoop.bind(this), 16);
     }
 
-    onJoin(client, options) {
+    onCreate() {
+        this.setState(new State());
+        this.clock.setInterval(this.ServerGameLoop.bind(this), 16);
+    }
+
+    onJoin(client) {
         let nextPosition = this.state.getNextPosition();
         this.state.createPlayer(client.sessionId);
-        this.send(client, {
-            event: "start_position",
+
+        client.send("start_position", {
             position: nextPosition
         });
 
-        this.broadcast({
-            event: "new_player",
+        this.broadcast("new_player", {
             position: nextPosition,
             id: client.sessionId
         }, {
             except: client
         });
-
     }
 
     onMessage(client, message) {
-        switch (message.action) {
+        console.log('client => ', client)
+        console.log('message => ', message)
+        if (
+            ["initial_position", "move", "shoot_bullet", "0"].includes(message.action) &&
+            this.state.getPlayer(client.sessionId) == undefined
+        ) return;
 
+        switch (message.action) {
+            case "0":
+                console.log('client => ', client)
+                console.log('message => ', message)
+                break;
             case "initial_position":
-                if (this.state.getPlayer(client.sessionId) == undefined) return; // Happens if the server restarts and a client is still connected
                 this.state.setPlayerPosition(client.sessionId, message.data);
                 break;
-
             case "move":
-                if (this.state.getPlayer(client.sessionId) == undefined) return;
                 this.state.movePlayer(client.sessionId, message.data);
                 break;
-
             case "shoot_bullet":
-                if (this.state.getPlayer(client.sessionId) == undefined) return;
                 if (Math.abs(message.data.speed_x) <= 100 && Math.abs(message.data.speed_y) <= 100) {
                     this.state.createBullet(client.sessionId, message.data);
                 }
                 break;
-
             default:
                 break;
         }
@@ -159,25 +144,29 @@ exports.outdoor = class extends colyseus.Room {
 
     onDispose() {}
 
-    // Update the bullets 60 times per frame and send updates 
+    // Update the bullets 60 times per frame and send updates
     ServerGameLoop() {
-                            
-        for (let i in this.state.bullets) {
+        for (let i in this.state.bullets.keys()) {
             this.state.moveBullet(i);
             //remove the bullet if it goes too far
-            if (this.state.bullets[i].x < -10 || this.state.bullets[i].x > 3200 || this.state.bullets[i].y < -10 || this.state.bullets[i].y > 3200 || this.state.bullets[i].distanceTravelled >= 800) {
+            if (
+                this.state.bullets[i].x < -10 ||
+                this.state.bullets[i].x > 3200 ||
+                this.state.bullets[i].y < -10 ||
+                this.state.bullets[i].y > 3200 ||
+                this.state.bullets[i].distanceTravelled >= 800
+            ) {
                 this.state.removeBullet(i);
             } else {
                 //check if this bullet is close enough to hit a player
-                for (let id in this.state.players) {
+                for (let id in this.state.players.keys()) {
                     if (this.state.bullets[i].owner_id != id) {
                         //because your own bullet shouldn't kill hit
-                        let dx = this.state.players[id].x - this.state.bullets[i].x;
-                        let dy = this.state.players[id].y - this.state.bullets[i].y;
-                        let dist = Math.sqrt(dx * dx + dy * dy);
+                        const dx = this.state.players[id].x - this.state.bullets[i].x;
+                        const dy = this.state.players[id].y - this.state.bullets[i].y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
                         if (dist < 30) {
-                            this.broadcast( {
-                                event: "hit",
+                            this.broadcast("hit", {
                                 punished_id: id,
                                 punisher_id: this.state.bullets[i].owner_id
                             });
