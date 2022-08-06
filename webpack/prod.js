@@ -1,13 +1,11 @@
-const merge = require("webpack-merge");
-const path = require("path");
-const base = require("./base");
-const TerserPlugin = require("terser-webpack-plugin");
+import TerserPlugin from "terser-webpack-plugin";
+import merge from "webpack-merge"
 
-module.exports = merge(base, {
+export default merge(base, {
   mode: "production",
   entry: "./client/src/index.js",
     output: {
-      path: path.resolve(__dirname, "../client/public/"),
+      path: "../client/public/",
       filename: "bundle.min.js"
   },
   devtool: false,
